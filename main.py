@@ -36,8 +36,7 @@ with open('email_template.html', 'r', encoding='utf-8') as f:
 
 # --- Smart Auto-Limits ---
 ACTIVE_ACCOUNTS = len(SENDER_ACCOUNTS)
-# Target: 100 emails per account/day. Divided by 12 GitHub runs/day.
-MAX_EMAILS_PER_RUN = (ACTIVE_ACCOUNTS * 100) // 12
+MAX_EMAILS_PER_RUN = 33
 
 def send_telegram_message(text, silent=True):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
