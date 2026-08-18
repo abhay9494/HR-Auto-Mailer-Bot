@@ -1,0 +1,35 @@
+name: HR Mailer Automation
+
+on:
+  schedule:
+    # Runs at minute 0 past every 2nd hour (e.g., 0:00, 2:00, 4:00 UTC)
+    - cron: '0 */2 * * *'
+  workflow_dispatch: 
+    # Allows you to manually click a "Run" button in GitHub to test it
+
+jobs:
+  run-mailer:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install gspread google-auth python-dotenv requests
+          
+      - name: Run Mailer Script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SENDER_ACCOUNTS: ${{ secrets.SENDER_ACCOUNTS }}
+        run: python main.py
