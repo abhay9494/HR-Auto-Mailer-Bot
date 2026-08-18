@@ -69,6 +69,7 @@ def send_email(sender_email, app_password, recipient_email):
     msg['From'] = f"{DISPLAY_NAME} <{sender_email}>"
     msg['To'] = recipient_email
     msg['Subject'] = EMAIL_SUBJECT
+    msg.add_header('reply-to', 'abhayprasad9494@gmail.com')
     
     msg.attach(MIMEText(HTML_TEMPLATE, 'html'))
     
