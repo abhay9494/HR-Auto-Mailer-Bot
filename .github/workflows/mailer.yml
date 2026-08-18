@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install gspread google-auth python-dotenv requests
+          pip install -r requirements.txt
           
       - name: Run Mailer Script
         env:
