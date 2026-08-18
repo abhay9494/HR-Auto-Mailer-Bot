@@ -2,5 +2,4 @@ gspread
 google-auth
 python-dotenv
 requests
-flask
-gunicorn
+PyPDF2
