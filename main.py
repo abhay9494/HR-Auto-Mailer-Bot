@@ -137,9 +137,21 @@ def process_bounces(sheet1):
             mail.login(email_addr, app_pass)
             mail.select("inbox")
             
-            status, messages = mail.search(None, '(FROM "mailer-daemon@googlemail.com" UNSEEN)')
-            if status == "OK" and messages[0]:
-                for num in messages[0].split():
+            # Search for various bounce subjects (Unread only)
+            queries = [
+                '(UNSEEN SUBJECT "Delivery Status Notification")',
+                '(UNSEEN SUBJECT "Undeliverable")',
+                '(UNSEEN SUBJECT "Message blocked")'
+            ]
+            
+            all_message_nums = set()
+            for query in queries:
+                status, messages = mail.search(None, query)
+                if status == "OK" and messages[0]:
+                    all_message_nums.update(messages[0].split())
+            
+            if all_message_nums:
+                for num in all_message_nums:
                     res, data = mail.fetch(num, "(RFC822)")
                     msg = email.message_from_bytes(data[0][1])
                     body = ""
@@ -155,9 +167,19 @@ def process_bounces(sheet1):
                         if failed.lower() != email_addr.lower():
                             cell = sheet1.find(failed)
                             if cell:
+                                # Mark as failed in the Google Sheet
                                 sheet1.update_cell(cell.row, 4, "Failed - Bounced")
                                 bounces_found += 1
                                 time.sleep(1)
+                    
+                    # Copy the email to the Bin/Trash folder
+                    mail.copy(num, '"[Gmail]/Trash"')
+                    # Flag it for removal from the main Inbox
+                    mail.store(num, '+FLAGS', '\\Deleted')
+                
+                # Expunge cleans up the Inbox, leaving the copied emails safely in the Bin
+                mail.expunge()
+                    
             mail.logout()
         except: pass
     return bounces_found
