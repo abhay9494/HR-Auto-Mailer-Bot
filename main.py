@@ -172,10 +172,7 @@ def process_bounces(sheet1):
                                 bounces_found += 1
                                 time.sleep(1)
                     
-                    # Copy the email to the Bin/Trash folder
-                    mail.copy(num, '"[Gmail]/Trash"')
-                    # Flag it for removal from the main Inbox
-                    mail.store(num, '+FLAGS', '\\Deleted')
+                    mail.store(num, '+FLAGS', '\\Seen')
                 
                 # Expunge cleans up the Inbox, leaving the copied emails safely in the Bin
                 mail.expunge()
