@@ -33,4 +33,5 @@ jobs:
           GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SENDER_ACCOUNTS: ${{ secrets.SENDER_ACCOUNTS }}
+          RESUME_FOLDER_LINK: ${{ secrets.RESUME_FOLDER_LINK }}
         run: python main.py
