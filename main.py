@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 import gspread
 import requests
 import PyPDF2
@@ -18,6 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS")
 SENDER_ACCOUNTS = [acc.split(",") for acc in os.getenv("SENDER_ACCOUNTS").split("|") if acc]
+RESUME_FOLDER_LINK = os.getenv("RESUME_FOLDER_LINK")
 
 with open('config.json', 'r', encoding='utf-8') as f:
     config = json.load(f)
@@ -115,17 +118,47 @@ def generate_spintax_email():
     return subject, html_body
 
 # --- PDF Hash Randomizer ---
-def get_randomized_pdf():
-    reader = PyPDF2.PdfReader("Abhay_Prasad_Resume.pdf")
+def get_randomized_pdf(creds):
+    folder_id_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', RESUME_FOLDER_LINK)
+    if not folder_id_match:
+        raise Exception("Invalid Google Drive Folder Link in environment variables.")
+    folder_id = folder_id_match.group(1)
+    
+    drive_service = build('drive', 'v3', credentials=creds)
+    
+    # 1. Search the specific folder for any PDF file
+    query = f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false"
+    results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get('files', [])
+    
+    if not items:
+        raise Exception("No PDF found in the specified Drive folder.")
+    
+    # Grab the ID of the first file found in the folder
+    file_id = items[0]['id']
+    
+    # 2. Download the file directly into memory
+    request = drive_service.files().get_media(fileId=file_id)
+    downloaded_bytes = BytesIO()
+    downloader = MediaIoBaseDownload(downloaded_bytes, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+        
+    # 3. Inject the hash randomizer
+    downloaded_bytes.seek(0)
+    reader = PyPDF2.PdfReader(downloaded_bytes)
     writer = PyPDF2.PdfWriter()
-    for page in reader.pages: writer.add_page(page)
     
+    for page in reader.pages: 
+        writer.add_page(page)
+        
     writer.add_metadata({"/CustomHash": str(time.time())})
+    pdf_bytes_out = BytesIO()
+    writer.write(pdf_bytes_out)
+    pdf_bytes_out.seek(0)
     
-    pdf_bytes = BytesIO()
-    writer.write(pdf_bytes)
-    pdf_bytes.seek(0)
-    return pdf_bytes
+    return pdf_bytes_out
 
 # --- IMAP Bounce Handler ---
 def process_bounces(sheet1):
@@ -135,55 +168,80 @@ def process_bounces(sheet1):
         try:
             mail = imaplib.IMAP4_SSL("imap.gmail.com")
             mail.login(email_addr, app_pass)
-            mail.select("inbox")
             
-            # Search for various bounce subjects (Unread only)
-            queries = [
-                '(UNSEEN SUBJECT "Delivery Status Notification")',
-                '(UNSEEN SUBJECT "Undeliverable")',
-                '(UNSEEN SUBJECT "Message blocked")'
-            ]
+            # Check both the primary Inbox and the Spam folder
+            for folder in ["inbox", '"[Gmail]/Spam"']:
+                try:
+                    mail.select(folder)
+                    
+                    # Search for various bounce subjects AND senders (Unread only)
+                    queries = [
+                        '(UNSEEN SUBJECT "Delivery Status Notification")',
+                        '(UNSEEN SUBJECT "Undeliverable")',
+                        '(UNSEEN SUBJECT "Message blocked")',
+                        '(UNSEEN FROM "Mail Delivery System")',
+                        '(UNSEEN FROM "mailer-daemon")',
+                        '(UNSEEN FROM "postmaster")'
+                    ]
+                    
+                    all_message_nums = set()
+                    for query in queries:
+                        status, messages = mail.search(None, query)
+                        if status == "OK" and messages[0]:
+                            all_message_nums.update(messages[0].split())
+                    
+                    if all_message_nums:
+                        for num in all_message_nums:
+                            res, data = mail.fetch(num, "(RFC822)")
+                            msg = email.message_from_bytes(data[0][1])
+                            body = ""
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    if part.get_content_type() == "text/plain":
+                                        body += part.get_payload(decode=True).decode(errors="ignore")
+                            else:
+                                body = msg.get_payload(decode=True).decode(errors="ignore")
+                            
+                            failed_emails = re.findall(bounce_regex, body)
+                            for failed in failed_emails:
+                                if failed.lower() != email_addr.lower():
+                                    cell = sheet1.find(failed)
+                                    if cell:
+                                        # Categorize the specific type of failure
+                                        if "Delivery incomplete" in body or "temporary problem" in body.lower():
+                                            sheet1.update_cell(cell.row, 4, "Delayed - Gmail Retrying")
+                                        elif "Message blocked" in body or "blocked" in body.lower():
+                                            sheet1.update_cell(cell.row, 4, "Blocked - Retrying")
+                                        elif "inbox full" in body.lower():
+                                            sheet1.update_cell(cell.row, 4, "Failed - Inbox Full")
+                                        elif "message not delivered" in body.lower() or "timed out" in body.lower():
+                                            sheet1.update_cell(cell.row, 4, "Failed - Server Timeout")
+                                        else:
+                                            sheet1.update_cell(cell.row, 4, "Failed - Bounced")
+                                            
+                                        bounces_found += 1
+                                        time.sleep(1)
+                            
+                            # Mark as read only to preserve the bounce logs for manual review
+                            mail.store(num, '+FLAGS', '\\Seen')
+                except:
+                    pass # Safely skip if the folder doesn't exist or is empty
             
-            all_message_nums = set()
-            for query in queries:
-                status, messages = mail.search(None, query)
-                if status == "OK" and messages[0]:
-                    all_message_nums.update(messages[0].split())
-            
-            if all_message_nums:
-                for num in all_message_nums:
-                    res, data = mail.fetch(num, "(RFC822)")
-                    msg = email.message_from_bytes(data[0][1])
-                    body = ""
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/plain":
-                                body += part.get_payload(decode=True).decode(errors="ignore")
-                    else:
-                        body = msg.get_payload(decode=True).decode(errors="ignore")
-                    
-                    failed_emails = re.findall(bounce_regex, body)
-                    for failed in failed_emails:
-                        if failed.lower() != email_addr.lower():
-                            cell = sheet1.find(failed)
-                            if cell:
-                                # Mark as failed in the Google Sheet
-                                sheet1.update_cell(cell.row, 4, "Failed - Bounced")
-                                bounces_found += 1
-                                time.sleep(1)
-                    
-                    mail.store(num, '+FLAGS', '\\Seen')
-                
-                # Expunge cleans up the Inbox, leaving the copied emails safely in the Bin
-                mail.expunge()
-                    
             mail.logout()
         except: pass
     return bounces_found
 
 # --- Core Execution ---
 def main():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    # --- Micro-Delay: Sleep 1 to 14 minutes to randomize execution time daily ---
+    delay_minutes = random.randint(1, 14)
+    print(f"Applying micro-delay of {delay_minutes} minutes...")
+    time.sleep(delay_minutes * 60)
+    
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.readonly"
+    ]
     creds = Credentials.from_service_account_info(json.loads(GOOGLE_CREDENTIALS_JSON), scopes=scopes)
     client = gspread.authorize(creds)
     sheet1 = client.open_by_url(SHEET_URL).sheet1
@@ -254,6 +312,9 @@ def main():
             # If it's a LIVE RUN, and the row was marked with "- DR", process it anyway to overwrite it!
             if not DRY_RUN and status.endswith("- DR"):
                 pass 
+            # If it was marked as a temporary block, allow it through for a retry!
+            elif status == "Blocked - Retrying":
+                pass
             else:
                 continue # Otherwise, skip this row entirely
         
@@ -279,21 +340,19 @@ def main():
             msg.attach(MIMEText(body, 'html'))
             
             if DELIVERY_METHOD == "ATTACHMENT":
-                pdf_bytes = get_randomized_pdf()
+                pdf_bytes = get_randomized_pdf(creds)
                 attach = MIMEApplication(pdf_bytes.read(), _subtype="pdf")
                 attach.add_header('Content-Disposition', 'attachment', filename="Abhay_Prasad_Resume.pdf")
                 msg.attach(attach)
                 
             try:
-                # We removed the 'if not DRY_RUN' check here so it physically sends the email.
                 server = smtplib.SMTP('smtp.gmail.com', 587)
                 server.starttls()
                 server.login(sender_email, app_pass)
                 server.send_message(msg)
                 server.quit()
                 
-                # Only add to the deduplication memory if it's a live run, 
-                # so you can easily re-test the same emails during dry runs.
+                # Only add to the deduplication memory if it's a live run
                 if not DRY_RUN:
                     sent_emails.add(target_email)
                     
@@ -301,7 +360,6 @@ def main():
                 sheet1.update_cell(row_num, 4, f"Yes{dr_suffix}")
                 send_telegram_message(f"✅ Sent to: {target_email}\nFrom: {sender_email}\n(Mode: {'Live Test' if DRY_RUN else 'Live Campaign'})")
                 
-                # We need a small delay even in testing so Gmail doesn't flag the sudden burst
                 if not DRY_RUN:
                     time.sleep(random.randint(6, 9))
                 else:
@@ -312,6 +370,12 @@ def main():
                 send_telegram_message(f"❌ Failed ({sender_email} -> {target_email}): {str(e)}")
                 
             account_index = (account_index + 1) % len(active_senders)
+
+    # --- POST-SWEEP: Catch instant bounces immediately before sleeping ---
+    if not DRY_RUN:
+        post_bounces = process_bounces(sheet1)
+        if post_bounces > 0:
+            send_telegram_message(f"🧹 <b>Post-Sweep Cleanup</b> | Caught {post_bounces} instant bounces.")
 
 if __name__ == "__main__":
     main()

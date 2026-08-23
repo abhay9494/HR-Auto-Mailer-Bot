@@ -2,8 +2,9 @@ name: HR Mailer Automation
 
 on:
   schedule:
-    # Runs at minute 0 past every 2nd hour (e.g., 0:00, 2:00, 4:00 UTC)
-    - cron: '0 */2 * * *'
+    # Runs 10 times daily. (Offset by 13 mins + Python micro-delay for organic send times)
+    # UTC hours: 2, 4, 6, 8, 10, 12, 14, 15, 17, 19
+    - cron: '13 2,4,6,8,10,12,14,15,17,19 * * *'
   workflow_dispatch: 
     # Allows you to manually click a "Run" button in GitHub to test it
 
