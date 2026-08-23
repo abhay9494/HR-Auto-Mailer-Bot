@@ -262,6 +262,8 @@ def main():
     active_senders = []
     for acc in SENDER_ACCOUNTS:
         record = next((r for r in bot_records if r['Account Email'] == acc[0]), None)
+        
+        # If the account exists in the sheet, check cooldowns
         if record:
             cooldown = record['Cooldown Until (UTC)']
             if cooldown:
@@ -270,6 +272,13 @@ def main():
                 else:
                     bot_sheet.update_cell(bot_records.index(record) + 2, 3, "") 
             active_senders.append({"creds": acc, "vol": int(record['Volume Limit'])})
+            
+        # If the account is new (in .env but missing from the sheet), add it dynamically!
+        else:
+            print(f"Adding new account to Bot Settings: {acc[0]}")
+            bot_sheet.append_row([acc[0], 400, "", "", "", ""])
+            active_senders.append({"creds": acc, "vol": 400})
+            time.sleep(2) # Prevent Google Sheets API rate limit
 
     if not active_senders:
         send_telegram_message("🛑 <b>All accounts are currently on cooldown.</b> Batch skipped.")
