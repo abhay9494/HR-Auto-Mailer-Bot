@@ -376,8 +376,14 @@ def main():
                     time.sleep(4) 
                     
             except Exception as e:
-                sheet1.update_cell(row_num, 4, f"Failed{dr_suffix}")
-                send_telegram_message(f"❌ Failed ({sender_email} -> {target_email}): {str(e)}")
+                error_msg = str(e).lower()
+                # If the sender account crashes (auth/connection), don't burn the HR lead!
+                if "auth" in error_msg or "connection" in error_msg or "login" in error_msg or "errno" in error_msg:
+                    sheet1.update_cell(row_num, 4, "Blocked - Retrying")
+                    send_telegram_message(f"⚠️ Account Error ({sender_email}): {str(e)} -> Retrying lead later.")
+                else:
+                    sheet1.update_cell(row_num, 4, f"Failed{dr_suffix}")
+                    send_telegram_message(f"❌ Failed ({sender_email} -> {target_email}): {str(e)}")
                 
             account_index = (account_index + 1) % len(active_senders)
 
