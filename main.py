@@ -298,7 +298,8 @@ def main():
     sent_emails = {re.findall(email_regex, r[2])[0] for r in rows[1:] if r[3].strip() == "Yes" and re.findall(email_regex, r[2])}
 
     emails_sent_this_run = 0
-    account_index = 0
+    # Start the rotation at a random account so retries never get stuck on Account 1
+    account_index = random.randint(0, len(active_senders) - 1)
     
     for i, row in enumerate(rows):
         # HARD LOCK: If Dry Run is active, stop checking after row 6
