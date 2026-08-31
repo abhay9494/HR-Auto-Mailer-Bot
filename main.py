@@ -301,19 +301,24 @@ def main():
     # Start the rotation at a random account so retries never get stuck on Account 1
     account_index = random.randint(0, len(active_senders) - 1)
     
-    for i, row in enumerate(rows):
-        # HARD LOCK: If Dry Run is active, stop checking after row 6
-        if DRY_RUN and i > 5:
-            send_telegram_message("🏁 <b>Dry Run Test Complete.</b> Only processed rows 2 through 6.")
+    # Loop backwards from the very bottom of the sheet up to Row 2
+    for i in range(len(rows) - 1, 0, -1):
+        row = rows[i]
+        
+        # HARD LOCK: If Dry Run is active, stop after sending 5 test emails
+        if DRY_RUN and emails_sent_this_run >= 5:
+            send_telegram_message("🏁 <b>Dry Run Test Complete.</b> Sent 5 test emails.")
             break
 
         if emails_sent_this_run >= total_emails_this_run:
             next_time = (datetime.now(timezone.utc) + timedelta(hours=2)).astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%I:%M %p IST')
             send_telegram_message(f"⏸️ <b>Batch limit reached.</b> Next run at {next_time}.")
             break
+            
+        # Skip completely blank trailing rows at the bottom of the sheet
+        if len(row) < 3 or not row[2].strip():
+            continue
 
-        if i == 0: continue
-        
         while len(row) < 4: row.append("")
         status = row[3].strip()
         
